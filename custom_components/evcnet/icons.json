@@ -1,0 +1,25 @@
+{
+  "entity": {
+    "sensor": {
+      "card": {
+        "default": "mdi:card-account-details"
+      },
+      "connector": {
+        "default": "mdi:ev-plug-type2"
+      },
+      "notification": {
+        "default": "mdi:message-text-outline"
+      },
+      "status": {
+        "default": "mdi:ev-station",
+        "state": {
+          "blocked": "mdi:lock",
+          "charging": "mdi:battery-charging",
+          "charging_complete": "mdi:battery-check",
+          "faulty": "mdi:alert-circle",
+          "offline": "mdi:lan-disconnect"
+        }
+      }
+    }
+  }
+}

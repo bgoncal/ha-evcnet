@@ -1,0 +1,80 @@
+{
+  "config": {
+    "abort": {
+      "already_configured": "This account is already configured",
+      "reauth_successful": "Re-authentication was successful",
+      "two_factor_expired": "The verification session ended. Start again to get a new code."
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to the portal",
+      "invalid_auth": "Invalid username or password",
+      "invalid_code": "The verification code is incorrect or has expired",
+      "unknown": "Unexpected error"
+    },
+    "step": {
+      "reauth_confirm": {
+        "title": "Log in to the portal again",
+        "description": "The portal session for {username} has ended or the password was rejected. Submit to log in again; if your account uses email verification, the portal sends you a new code. Leave the password empty to keep the saved one.",
+        "data": {
+          "password": "Password"
+        }
+      },
+      "two_factor": {
+        "title": "Verification code",
+        "description": "The portal emailed a 6-digit code to {destination}. Enter it to finish logging in.",
+        "data": {
+          "code": "Verification code"
+        }
+      },
+      "user": {
+        "data": {
+          "password": "Password",
+          "url": "Portal URL",
+          "username": "Username"
+        },
+        "data_description": {
+          "url": "The address you use to log in to your charge point portal, for example https://50five-snl.evc-net.com.",
+          "username": "The username (usually your email address) you use on the portal."
+        },
+        "description": "Log in with the account you use on the EVC-net portal."
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "card": {
+        "name": "Card"
+      },
+      "connector": {
+        "name": "Connector"
+      },
+      "notification": {
+        "name": "Notification"
+      },
+      "session_duration": {
+        "name": "Session duration"
+      },
+      "session_energy": {
+        "name": "Session energy"
+      },
+      "state_of_charge": {
+        "name": "State of charge"
+      },
+      "status": {
+        "name": "Status",
+        "state": {
+          "available": "Available",
+          "blocked": "Blocked",
+          "charging": "Charging",
+          "charging_complete": "Charging complete",
+          "faulty": "Faulty",
+          "offline": "No communication",
+          "reserved": "Reserved"
+        }
+      },
+      "total_energy": {
+        "name": "Total energy delivered"
+      }
+    }
+  }
+}
