@@ -21,6 +21,7 @@ from custom_components.evcnet.api import (
     EvcNetInvalidCode,
     EvcNetSessionExpired,
     EvcNetTwoFactorRequired,
+    _minutes,
     _number,
     channel_state,
     parse_status,
@@ -45,6 +46,7 @@ TWO_FACTOR_PAGE = """<html><head><title>50five</title></head><body>
 </form></body></html>"""
 
 
+_NO_ANSWER = object()
 CARDS_PAGE = """<html><body><table class='table'>
 <thead><tr><th>Card ID</th><th>Expire date</th><th>Reference</th><th></th></tr></thead>
 <tbody>
@@ -195,6 +197,8 @@ class FakePortal:
             return web.Response(text="[]", content_type="text/html")
         requests = json.loads(request.query["requests"])
         results = [self._handle(requests[str(i)]) for i in range(len(requests))]
+        if _NO_ANSWER in results:
+            return web.Response(text="[]", content_type="text/html")
         return web.Response(text=json.dumps(results), content_type="text/html")
 
     def _handle(self, req: dict[str, Any]) -> Any:
@@ -202,7 +206,8 @@ class FakePortal:
             "networkOverview": lambda: load_fixture("network_overview.json"),
             "overview": lambda: self.overview,
             "transactions": lambda: load_fixture("transactions.json"),
-            "action": lambda: self.actions.append(req["params"]) or True,
+            # The real portal answers commands with an empty list.
+            "action": lambda: self.actions.append(req["params"]) or _NO_ANSWER,
         }[req["method"]]()
 
 
@@ -521,11 +526,11 @@ async def test_actions(
     kwargs: dict[str, str],
     expected: dict[str, Any],
 ) -> None:
-    """Test commands are sent like the portal's dashboard buttons send them."""
+    """Test commands are sent once, like the portal's dashboard buttons do."""
     fake, url = portal
     client = EvcNetClient(session, USERNAME, PASSWORD, url)
 
-    assert await client.action(CHARGE_POINT_ID, action, **kwargs) is True
+    assert await client.action(CHARGE_POINT_ID, action, **kwargs) is None
 
     assert fake.actions == [
         {"action": action.value, "rechargeSpotId": CHARGE_POINT_ID, **expected}
@@ -598,6 +603,22 @@ def test_channel_state(code: str, expected: ChannelState) -> None:
 def test_unparseable_status(code: str | None) -> None:
     """Test missing or broken status codes."""
     assert parse_status(code) is None
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("01:48", 108),
+        ("13:19", 799),
+        ("00:00", 0),
+        ("1d02:48", 1608),
+        (None, None),
+        ("n/a", None),
+    ],
+)
+def test_minutes(value: Any, expected: int | None) -> None:
+    """Test session durations as the portal's log shows them."""
+    assert _minutes(value) == expected
 
 
 @pytest.mark.parametrize(

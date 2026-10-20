@@ -142,12 +142,15 @@ The integration polls every 30 seconds (the portal's own page polls every 15).
 The buttons send the same commands as the portal's real-time dashboard. The
 portal passes them on to the charger, so:
 
-- They only work while the charger is online (connectivity on).
-- The result shows up in the status sensors after a few seconds. The
-  integration refreshes right after each press.
-- Home Assistant only reports whether the portal accepted the command, not
-  whether the charger carried it out. Check **Status** and **Notification**
-  for that.
+- They only work while the charger is online (connectivity on). While it
+  isn't, the buttons refuse with an error instead of sending anything.
+- Each press sends the command exactly once and never retries it.
+- The portal doesn't confirm commands: it answers every one with an empty
+  response, and its own page ignores that answer too. The charger reports
+  back later. Successful commands appear in the charger's log on the portal
+  (for example "Remote stop transaction accepted" or "Reset accepted"), and
+  the status sensors update after a few seconds. The integration refreshes
+  right after each press.
 
 **Start charging** needs one of your charging cards, like the portal's own
 dialog. The integration reads your active cards from the portal's **Cards**
@@ -285,15 +288,20 @@ in [`api.py`](custom_components/evcnet/api.py).
   returns nothing for a private home charger. The integration therefore takes
   the internal card id from the `/Cards/DeactivateCard/<id>` links on the
   `/Cards/List` page.
-- **The answer:** the portal's own page ignores it.
+- **The answer:** always `[]`, which looks exactly like an expired session.
+  The client checks the session with a harmless call first, then sends the
+  command once and ignores the answer, so a command is never repeated.
+- **Confirmation:** comes from the charger, in the detailed log
+  (`RechargeSpotsAsyncService.log` with `{"rechargeSpotId", "channel",
+  "detailed": true}`), e.g. "Remote stop transaction accepted".
 
 ## Known gaps
 
-- The portal formats for power, energy and transaction time *while charging*
-  were inferred from the field names and the portal's JS, not observed live.
-  If a value looks wrong, download diagnostics from the device page (card IDs,
-  addresses, credentials and session cookies are redacted) and compare it with
-  the `status_code` attribute.
+- The value formats while charging were checked against real sessions in the
+  portal's log. Power and energy are numbers, and the session time is
+  `"01:48"`, or `"1d02:48"` past a day. If something still looks wrong,
+  download diagnostics from the device page (card IDs, addresses,
+  credentials and session cookies are redacted).
 - Only tested with one single-connector home charger on the 50five portal.
 - The command buttons were built from the portal's JavaScript and checked
   against a simulated portal only. Remote **Start charging** is the least

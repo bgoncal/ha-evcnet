@@ -107,6 +107,12 @@ async def _send(
     action: ChargePointAction,
     **kwargs: Any,
 ) -> None:
+    status = coordinator.data.get(charge_point_id) if coordinator.data else None
+    if status is not None and status.online is False:
+        # The portal cannot pass commands on, and might deliver them later.
+        raise HomeAssistantError(
+            f"The charger has no connection to the portal, so {action} was not sent"
+        )
     try:
         result = await coordinator.client.action(charge_point_id, action, **kwargs)
     except EvcNetAuthError as err:

@@ -153,7 +153,8 @@ _FAULTY_MASK2 = 0x4000002F
 _FAULTY_MASK = 0xD8407940
 
 _THOUSANDS_COMMA = re.compile(r"\d{1,3}(,\d{3})+")
-_HOURS_MINUTES = re.compile(r"\s*(\d+)\s*[:hHuU]\s*(\d{1,2})")
+# "01:48", or "1d02:48" for sessions longer than a day.
+_DURATION = re.compile(r"\s*(?:(\d+)\s*d\s*)?(\d+)\s*[:hHuU]\s*(\d{1,2})")
 
 
 def parse_status(code: str | None) -> tuple[ChannelFlag2, ChannelFlag] | None:
@@ -210,9 +211,9 @@ def _number(value: Any) -> float | None:
 
 
 def _minutes(value: Any) -> int | None:
-    if not value or not (match := _HOURS_MINUTES.match(str(value))):
+    if not value or not (match := _DURATION.match(str(value))):
         return None
-    return int(match[1]) * 60 + int(match[2])
+    return int(match[1] or 0) * 1440 + int(match[2]) * 60 + int(match[3])
 
 
 def _text(value: Any) -> str | None:
@@ -695,8 +696,11 @@ class EvcNetClient:
                 raise ValueError("Starting a transaction needs a card")
             args["customer"] = None
             args["card"] = card
-        (result,) = await self._call(_request(_RECHARGE_SPOTS, "action", args))
-        return result
+        # Check the session with a harmless call first: a command must never
+        # be sent twice, and the portal answers commands with [] anyway.
+        await self._call(_network_overview())
+        result = await self._ajax(_request(_RECHARGE_SPOTS, "action", args))
+        return result[0] if result else None
 
     async def _finish_login(self, landing: aiohttp.ClientResponse) -> None:
         if _is_login_page(landing.url):

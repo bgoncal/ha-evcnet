@@ -25,6 +25,12 @@ from .conftest import CHARGE_POINT_ID
 PREFIX = f"charge_point_{CHARGE_POINT_ID}"
 
 
+@pytest.fixture
+def overview_fixture() -> str:
+    """Commands are only sent to a charger that is online."""
+    return "overview_charging.json"
+
+
 async def _setup(hass: HomeAssistant, entry: MockConfigEntry) -> None:
     entry.add_to_hass(hass)
     await hass.config_entries.async_setup(entry.entry_id)
@@ -146,3 +152,15 @@ async def test_session_ended(
 
     (flow,) = hass.config_entries.flow.async_progress()
     assert flow["context"]["source"] == SOURCE_REAUTH
+
+
+@pytest.mark.parametrize("overview_fixture", ["overview_offline.json"])
+async def test_offline_charger(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry, mock_client: AsyncMock
+) -> None:
+    """Test no command is sent while the charger has no connection."""
+    await _setup(hass, mock_config_entry)
+
+    with pytest.raises(HomeAssistantError, match="no connection"):
+        await _press(hass, "start_charging")
+    mock_client.action.assert_not_called()
