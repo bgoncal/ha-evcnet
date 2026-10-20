@@ -33,7 +33,7 @@
           "username": "Username"
         },
         "data_description": {
-          "url": "The address you use to log in to your charge point portal, for example https://50five-snl.evc-net.com.",
+          "url": "The address of the portal you log in to. Keep the default if you use the 50five portal.",
           "username": "The username (usually your email address) you use on the portal."
         },
         "description": "Log in with the account you use on the EVC-net portal."

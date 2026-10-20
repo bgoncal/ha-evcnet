@@ -24,20 +24,36 @@ endpoint. It only reads data and never presses any of the portal's buttons
 
 ## Requirements
 
-- Home Assistant 2025.2 or newer.
+- Home Assistant 2025.2 or newer. The integration's icon only shows from
+  2026.3 on; older versions show a placeholder.
 - An account on an EVC-net based portal, such as
   `https://50five-snl.evc-net.com`, with at least one charge point.
 - Access to the mailbox of that account if it uses email verification (2FA).
 
 ## Installation
 
-### With HACS
+### With HACS (recommended)
+
+You need [HACS](https://hacs.xyz) installed. Then click this button:
+
+[![Open your Home Assistant instance and open this repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=bgoncal&repository=ha-evcnet&category=integration)
+
+1. Confirm adding the repository when Home Assistant asks, then choose
+   **Download**.
+2. Restart Home Assistant.
+
+HACS then tells you when a new version is available.
+
+<details>
+<summary>Without the button</summary>
 
 1. In Home Assistant, open **HACS**.
 2. Open the menu (⋮) in the top right and choose **Custom repositories**.
 3. Add `https://github.com/bgoncal/ha-evcnet` with type **Integration**.
 4. Search for **EVC-net (50five)**, open it and choose **Download**.
 5. Restart Home Assistant.
+
+</details>
 
 ### Manually
 
@@ -49,8 +65,10 @@ endpoint. It only reads data and never presses any of the portal's buttons
 
 ## Setup
 
-1. Go to **Settings → Devices & services → Add integration** and search for
-   **EVC-net (50five)**.
+[![Open your Home Assistant instance and start setting up EVC-net (50five).](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=evcnet)
+
+1. Click the button above, or go to **Settings → Devices & services → Add
+   integration** and search for **EVC-net (50five)**.
 2. Fill in:
    - **Portal URL**: the site you log in to. The default is
      `https://50five-snl.evc-net.com`. Change it if your provider uses another
@@ -238,3 +256,8 @@ uv venv --python 3.14 .venv
 uv pip install --python .venv --only-binary cryptography -r requirements_test.txt
 .venv/bin/pytest
 ```
+
+## License
+
+[MIT](LICENSE). The charger icon is original artwork made for this
+integration and is not the logo of 50five or EVC-net.
