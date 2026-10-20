@@ -41,6 +41,37 @@
     }
   },
   "entity": {
+    "button": {
+      "block": {
+        "name": "Block"
+      },
+      "hard_reset": {
+        "name": "Hard reset"
+      },
+      "retrieve_status": {
+        "name": "Retrieve status"
+      },
+      "soft_reset": {
+        "name": "Soft reset"
+      },
+      "start_charging": {
+        "name": "Start charging"
+      },
+      "stop_charging": {
+        "name": "Stop charging"
+      },
+      "unblock": {
+        "name": "Unblock"
+      },
+      "unlock_connector": {
+        "name": "Unlock connector"
+      }
+    },
+    "select": {
+      "charging_card": {
+        "name": "Charging card"
+      }
+    },
     "sensor": {
       "card": {
         "name": "Card"

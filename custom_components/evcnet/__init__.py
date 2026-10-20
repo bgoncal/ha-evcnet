@@ -12,7 +12,7 @@ from .const import CONF_COOKIES, CONF_TWO_FACTOR
 from .coordinator import EvcNetConfigEntry, EvcNetCoordinator
 from .entity import charge_point_device_info
 
-PLATFORMS = [Platform.BINARY_SENSOR, Platform.SENSOR]
+PLATFORMS = [Platform.BINARY_SENSOR, Platform.BUTTON, Platform.SELECT, Platform.SENSOR]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: EvcNetConfigEntry) -> bool:

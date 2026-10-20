@@ -10,6 +10,7 @@ import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.evcnet.api import (
+    Card,
     Channel,
     ChargePoint,
     ChargePointStatus,
@@ -23,6 +24,10 @@ CHARGE_POINT_ID = "1234567890"
 BASE_URL = "https://50five-snl.evc-net.com"
 USERNAME = "user@example.com"
 PASSWORD = "secret"
+CARDS = [
+    Card(id="501", number="NL-ABC-C12345678-X"),
+    Card(id="502", number="NL-XYZ-C87654321-Y"),
+]
 COOKIES = {"PHPSESSID": "saved-session", "SERVERID": "www_1"}
 
 
@@ -95,6 +100,8 @@ def mock_client_cls(overview_fixture: str) -> Generator[MagicMock]:
         client.transactions.return_value = {
             CHARGE_POINT_ID: transactions_from_fixture()
         }
+        client.cards.return_value = CARDS
+        client.action.return_value = True
         yield client_cls
 
 

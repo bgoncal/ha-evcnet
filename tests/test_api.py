@@ -12,7 +12,9 @@ from aiohttp.test_utils import TestServer
 import pytest
 
 from custom_components.evcnet.api import (
+    Card,
     ChannelState,
+    ChargePointAction,
     EvcNetAuthError,
     EvcNetClient,
     EvcNetConnectionError,
@@ -43,6 +45,18 @@ TWO_FACTOR_PAGE = """<html><head><title>50five</title></head><body>
 </form></body></html>"""
 
 
+CARDS_PAGE = """<html><body><table class='table'>
+<thead><tr><th>Card ID</th><th>Expire date</th><th>Reference</th><th></th></tr></thead>
+<tbody>
+<tr><td>NL-ABC-C12345678-X</td><td></td><td>Home</td>
+<td><a href='/Cards/DeactivateCard/501'>Deactivate</a></td></tr>
+<tr><td>NL-XYZ-C87654321-Y</td><td></td><td></td>
+<td><a href='/Cards/DeactivateCard/502'>Deactivate</a></td></tr>
+<tr><td>NL-OLD-C00000000-Z</td><td>01-01-2025</td><td></td>
+<td><a href='/Cards/ActivateCard/503'>Activate</a></td></tr>
+</tbody></table></body></html>"""
+
+
 class FakePortal:
     """Mimics the behaviour of the real EVC-net portal seen in live logins.
 
@@ -66,6 +80,7 @@ class FakePortal:
         self.reject_with_redirect = False
         self.ajax_ignores_sessions = False
         self.empty_answers = 0
+        self.actions: list[dict[str, Any]] = []
         self.app = web.Application()
         self.app.router.add_get("/Login/Login", self._login_page)
         self.app.router.add_post("/Login/Login", self._login)
@@ -74,6 +89,7 @@ class FakePortal:
         self.app.router.add_post("/2fa_check", self._two_factor_check)
         self.app.router.add_post("/Login/CustomerOtp/Scheb/Resend", self._resend)
         self.app.router.add_get("/api/ajax", self._ajax)
+        self.app.router.add_get("/Cards/List", self._cards_page)
 
     def expire_sessions(self) -> None:
         """Forget every session, like the portal does after a day."""
@@ -159,6 +175,11 @@ class FakePortal:
         response.set_cookie("PHPSESSID", self._new_session("active"), max_age=86400)
         raise response
 
+    async def _cards_page(self, request: web.Request) -> web.Response:
+        if self._state(request) != "active":
+            raise self._redirect(request, "/Login/Login")
+        return web.Response(text=CARDS_PAGE, content_type="text/html")
+
     async def _resend(self, request: web.Request) -> web.Response:
         raise AssertionError("The client must never ask for another code")
 
@@ -181,6 +202,7 @@ class FakePortal:
             "networkOverview": lambda: load_fixture("network_overview.json"),
             "overview": lambda: self.overview,
             "transactions": lambda: load_fixture("transactions.json"),
+            "action": lambda: self.actions.append(req["params"]) or True,
         }[req["method"]]()
 
 
@@ -433,6 +455,110 @@ async def test_html_answer_is_a_connection_error(
 
     with pytest.raises(EvcNetConnectionError):
         await client.charge_points()
+
+
+async def test_cards(
+    portal: tuple[FakePortal, str], session: aiohttp.ClientSession
+) -> None:
+    """Test reading the active cards from the Cards page."""
+    _, url = portal
+    client = EvcNetClient(session, USERNAME, PASSWORD, url)
+
+    assert await client.cards() == [
+        Card(id="501", number="NL-ABC-C12345678-X"),
+        Card(id="502", number="NL-XYZ-C87654321-Y"),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("action", "kwargs", "expected"),
+    [
+        pytest.param(
+            ChargePointAction.HARD_RESET, {}, {"clickedButtonId": 1}, id="hard_reset"
+        ),
+        pytest.param(
+            ChargePointAction.SOFT_RESET, {}, {"clickedButtonId": 1}, id="soft_reset"
+        ),
+        pytest.param(
+            ChargePointAction.GET_STATUS, {}, {"clickedButtonId": 1}, id="get_status"
+        ),
+        pytest.param(
+            ChargePointAction.BLOCK,
+            {},
+            {"clickedButtonId": 0, "channel": "0"},
+            id="block_all_channels",
+        ),
+        pytest.param(
+            ChargePointAction.UNBLOCK,
+            {"channel": "1"},
+            {"clickedButtonId": 0, "channel": "1"},
+            id="unblock_channel",
+        ),
+        pytest.param(
+            ChargePointAction.UNLOCK_CONNECTOR,
+            {"channel": "1"},
+            {"clickedButtonId": 0, "channel": "1"},
+            id="unlock_connector",
+        ),
+        pytest.param(
+            ChargePointAction.START_TRANSACTION,
+            {"channel": "1", "card": "501"},
+            {"clickedButtonId": 0, "channel": "1", "customer": None, "card": "501"},
+            id="start_transaction",
+        ),
+        pytest.param(
+            ChargePointAction.STOP_TRANSACTION,
+            {"channel": "1"},
+            {"clickedButtonId": 0, "channel": "1"},
+            id="stop_transaction",
+        ),
+    ],
+)
+async def test_actions(
+    portal: tuple[FakePortal, str],
+    session: aiohttp.ClientSession,
+    action: ChargePointAction,
+    kwargs: dict[str, str],
+    expected: dict[str, Any],
+) -> None:
+    """Test commands are sent like the portal's dashboard buttons send them."""
+    fake, url = portal
+    client = EvcNetClient(session, USERNAME, PASSWORD, url)
+
+    assert await client.action(CHARGE_POINT_ID, action, **kwargs) is True
+
+    assert fake.actions == [
+        {"action": action.value, "rechargeSpotId": CHARGE_POINT_ID, **expected}
+    ]
+
+
+@pytest.mark.parametrize(
+    ("action", "kwargs"),
+    [
+        pytest.param(
+            ChargePointAction.START_TRANSACTION,
+            {"channel": "1"},
+            id="start_without_card",
+        ),
+        pytest.param(ChargePointAction.STOP_TRANSACTION, {}, id="stop_without_channel"),
+        pytest.param(
+            ChargePointAction.UNLOCK_CONNECTOR, {}, id="unlock_without_channel"
+        ),
+    ],
+)
+async def test_action_missing_arguments(
+    portal: tuple[FakePortal, str],
+    session: aiohttp.ClientSession,
+    action: ChargePointAction,
+    kwargs: dict[str, str],
+) -> None:
+    """Test commands that cannot be sent without more information."""
+    fake, url = portal
+    client = EvcNetClient(session, USERNAME, PASSWORD, url)
+
+    with pytest.raises(ValueError):
+        await client.action(CHARGE_POINT_ID, action, **kwargs)
+    assert fake.actions == []
 
 
 async def test_unreachable(session: aiohttp.ClientSession) -> None:

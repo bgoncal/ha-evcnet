@@ -10,6 +10,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from homeassistant.util import dt as dt_util
 
 from .api import (
+    Card,
     ChargePoint,
     ChargePointStatus,
     EvcNetAuthError,
@@ -51,6 +52,8 @@ class EvcNetCoordinator(DataUpdateCoordinator[dict[str, ChargePointStatus]]):
         )
         self.client = client
         self.charge_points: dict[str, ChargePoint] = {}
+        self.cards: list[Card] = []
+        self.selected_card: Card | None = None
         self._completed_kwh: dict[str, float] = {}
         self._history_read_at: datetime | None = None
         self._in_session: dict[str, bool] = {}
@@ -64,6 +67,12 @@ class EvcNetCoordinator(DataUpdateCoordinator[dict[str, ChargePointStatus]]):
         except EvcNetError as err:
             raise UpdateFailed(str(err)) from err
         self.charge_points = {cp.id: cp for cp in charge_points}
+        try:
+            self.cards = await self.client.cards()
+        except EvcNetError as err:
+            # Only remote start needs a card; don't fail the whole setup.
+            LOGGER.warning("Could not read the charging cards: %s", err)
+        self.selected_card = next(iter(self.cards), None)
         self._save_cookies()
 
     async def _async_update_data(self) -> dict[str, ChargePointStatus]:

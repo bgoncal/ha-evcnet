@@ -115,6 +115,38 @@ class ChannelState(StrEnum):
     OFFLINE = "offline"
 
 
+class ChargePointAction(StrEnum):
+    """Commands behind the buttons of the portal's real-time dashboard."""
+
+    HARD_RESET = "HardReset"
+    SOFT_RESET = "SoftReset"
+    BLOCK = "Block"
+    UNBLOCK = "Unblock"
+    UNLOCK_CONNECTOR = "UnlockConnector"
+    START_TRANSACTION = "StartTransaction"
+    STOP_TRANSACTION = "StopTransaction"
+    GET_STATUS = "GetStatus"
+
+
+# The portal asks Yes/No for these and OK/Cancel for the rest; the answer is
+# sent along as clickedButtonId (ModalMessageBox.RESULT_YES / RESULT_OK).
+_YES_NO_ACTIONS = {
+    ChargePointAction.HARD_RESET,
+    ChargePointAction.SOFT_RESET,
+    ChargePointAction.GET_STATUS,
+}
+_RESULT_OK = 0
+_RESULT_YES = 1
+# Channel "0" means all channels in the portal's dialog.
+_ALL_CHANNELS = "0"
+_CHANNEL_ACTIONS = {
+    ChargePointAction.BLOCK,
+    ChargePointAction.UNBLOCK,
+    ChargePointAction.UNLOCK_CONNECTOR,
+    ChargePointAction.START_TRANSACTION,
+    ChargePointAction.STOP_TRANSACTION,
+}
+
 # Masks copied from ChannelStatusIcon.setStatus in the portal JS.
 _OFFLINE_MASK2 = ChannelFlag2.NO_COMMUNICATION | ChannelFlag2.POWER_FAILURE
 _FAULTY_MASK2 = 0x4000002F
@@ -304,6 +336,65 @@ class Transaction:
             end=_timestamp(row.get("ENDDATE_ISO")),
             energy_kwh=_number(row.get("ENERGY_CONSUMED_KWH")),
         )
+
+
+@dataclass(frozen=True, kw_only=True)
+class Card:
+    """A charging card on the account."""
+
+    id: str
+    number: str
+
+
+_CARD_LINK = re.compile(r"/Cards/DeactivateCard/(\d+)")
+
+
+class _TableParser(HTMLParser):
+    """Collect the cell texts and links of every table body row."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.rows: list[tuple[list[str], list[str]]] = []
+        self._in_body = False
+        self._row: tuple[list[str], list[str]] | None = None
+        self._cell: list[str] | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "tbody":
+            self._in_body = True
+        elif tag == "tr" and self._in_body:
+            self._row = ([], [])
+        elif tag == "td" and self._row is not None:
+            self._cell = []
+        elif tag == "a" and self._row is not None and (href := dict(attrs).get("href")):
+            self._row[1].append(href)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "td" and self._row is not None and self._cell is not None:
+            self._row[0].append(" ".join(self._cell))
+            self._cell = None
+        elif tag == "tr" and self._row is not None:
+            self.rows.append(self._row)
+            self._row = None
+        elif tag == "tbody":
+            self._in_body = False
+
+    def handle_data(self, data: str) -> None:
+        if self._cell is not None and (text := data.strip()):
+            self._cell.append(text)
+
+
+def _parse_cards(html: str) -> list[Card]:
+    """Read the active cards from the portal's Cards page."""
+    parser = _TableParser()
+    parser.feed(html)
+    cards = []
+    for cells, links in parser.rows:
+        # Only active cards have a deactivate link; it carries the internal id.
+        card_id = next((m[1] for link in links if (m := _CARD_LINK.search(link))), None)
+        if card_id and cells and cells[0]:
+            cards.append(Card(id=card_id, number=cells[0]))
+    return cards
 
 
 _MASKED_EMAIL = re.compile(r"[\w.*+-]+@[\w.*-]+\.[\w*]+")
@@ -560,6 +651,52 @@ class EvcNetClient:
             ]
             for cp_id, rows in zip(ids, results, strict=True)
         }
+
+    async def cards(self) -> list[Card]:
+        """Return the account's active charging cards."""
+        # Makes sure the session works (or fails the usual way) first.
+        await self._call(_network_overview())
+        response = await self._request("GET", self._url("Cards/List"))
+        page = await self._follow_redirects(response)
+        if _is_login_page(page.url) or _is_two_factor_page(page.url):
+            raise EvcNetSessionExpired("The portal session has ended")
+        return _parse_cards(await page.text())
+
+    async def action(
+        self,
+        charge_point_id: str,
+        action: ChargePointAction,
+        *,
+        channel: str | None = None,
+        card: str | None = None,
+    ) -> Any:
+        """Send a command the way the portal's dashboard buttons do.
+
+        ``channel`` defaults to all channels where the portal allows that;
+        unlocking and stopping need a specific channel, starting needs the
+        internal id of a card.
+        """
+        args: dict[str, Any] = {
+            "action": action.value,
+            "rechargeSpotId": charge_point_id,
+            "clickedButtonId": (
+                _RESULT_YES if action in _YES_NO_ACTIONS else _RESULT_OK
+            ),
+        }
+        if action in _CHANNEL_ACTIONS:
+            if channel is None and action in (
+                ChargePointAction.UNLOCK_CONNECTOR,
+                ChargePointAction.STOP_TRANSACTION,
+            ):
+                raise ValueError(f"{action} needs a channel")
+            args["channel"] = channel or _ALL_CHANNELS
+        if action is ChargePointAction.START_TRANSACTION:
+            if not card:
+                raise ValueError("Starting a transaction needs a card")
+            args["customer"] = None
+            args["card"] = card
+        (result,) = await self._call(_request(_RECHARGE_SPOTS, "action", args))
+        return result
 
     async def _finish_login(self, landing: aiohttp.ClientResponse) -> None:
         if _is_login_page(landing.url):

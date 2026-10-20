@@ -18,9 +18,10 @@ EVC-net charging portal (such as `https://50five-snl.evc-net.com`) into Home
 Assistant: whether the charger is online, its status, power, session energy,
 session time, the RFID card in use, and the lifetime energy delivered.
 
-It logs in the same way the website does and reads the portal's internal JSON
-endpoint. It only reads data and never presses any of the portal's buttons
-(reset, block, start/stop, and so on).
+It also offers the dashboard's buttons (reset, block, unlock, start/stop
+charging, retrieve status) as Home Assistant buttons. It logs in the same way
+the website does and uses the portal's internal JSON endpoint. Commands are only
+ever sent when you press a button or an automation of yours does.
 
 ## Requirements
 
@@ -127,8 +128,34 @@ gets an extra device per connector.
 | `sensor.…_total_energy_delivered` | Transaction history + live session | Lifetime kWh with 0.01 kWh resolution; **use this one in the Energy dashboard** |
 | `sensor.…_state_of_charge` | SoC | Disabled by default; AC chargers rarely report it |
 | `sensor.…_connector` | Connector type | Disabled by default, diagnostic |
+| `button.…_start_charging` / `button.…_stop_charging` | Start / Stop transaction | Per connector; start uses the card from **Charging card** |
+| `button.…_unlock_connector` | Unlock connector | Per connector |
+| `button.…_block` / `button.…_unblock` | Block / Unblock | All connectors, the portal's default |
+| `button.…_retrieve_status` | Retrieve status | Asks the charger to report its status again; diagnostic |
+| `button.…_hard_reset` / `button.…_soft_reset` | Hard / Soft reset | Restarts the charger; configuration |
+| `select.…_charging_card` | Your **Cards** page | Which of your active cards **Start charging** uses; configuration |
 
 The integration polls every 30 seconds (the portal's own page polls every 15).
+
+## Actions
+
+The buttons send the same commands as the portal's real-time dashboard. The
+portal passes them on to the charger, so:
+
+- They only work while the charger is online (connectivity on).
+- The result shows up in the status sensors after a few seconds. The
+  integration refreshes right after each press.
+- Home Assistant only reports whether the portal accepted the command, not
+  whether the charger carried it out. Check **Status** and **Notification**
+  for that.
+
+**Start charging** needs one of your charging cards, like the portal's own
+dialog. The integration reads your active cards from the portal's **Cards**
+page at startup and offers them in the **Charging card** select. It defaults
+to the first card; the choice is kept across restarts.
+
+The resets restart the charger and are filed under the device's
+configuration entities, so they don't end up on dashboards by accident.
 
 ## Energy dashboard
 
@@ -233,11 +260,32 @@ The summary state uses the same masks as the portal's `ChannelStatusIcon`. For
 example, `1000000000000000` decodes to *No communication*. The full flag list is
 in [`api.py`](custom_components/evcnet/api.py).
 
-**Portal actions.** The dashboard buttons all call `RechargeSpotsAsyncService.action`
-with `{"action": ..., "rechargeSpotId": ..., "channel": ...}`. The actions are
-`HardReset`, `SoftReset`, `Block`, `Unblock`, `UnlockConnector`,
-`StartTransaction`, `StopTransaction` and `GetStatus`. This integration is
-read-only and never calls them.
+**Portal actions.** The dashboard buttons all call
+`RechargeSpotsAsyncService.action` with:
+
+```json
+{
+  "action": "StartTransaction",
+  "rechargeSpotId": "<charge point id>",
+  "clickedButtonId": 0,
+  "channel": "1",
+  "customer": null,
+  "card": "<internal card id>"
+}
+```
+
+- **`clickedButtonId`:** the answer to the portal's confirmation dialog. It's
+  `1` (Yes) for `HardReset`, `SoftReset` and `GetStatus`, and `0` (OK) for the
+  rest.
+- **`channel`:** sent with `Block`, `Unblock`, `UnlockConnector`,
+  `StartTransaction` and `StopTransaction`. `"0"` means all channels, which
+  the portal allows for block, unblock and start.
+- **`card` and `customer`:** only sent with `StartTransaction`. The portal's
+  dialog looks cards up through `RechargeSpotsAsyncService.cardAccess`, which
+  returns nothing for a private home charger. The integration therefore takes
+  the internal card id from the `/Cards/DeactivateCard/<id>` links on the
+  `/Cards/List` page.
+- **The answer:** the portal's own page ignores it.
 
 ## Known gaps
 
@@ -247,7 +295,9 @@ read-only and never calls them.
   addresses, credentials and session cookies are redacted) and compare it with
   the `status_code` attribute.
 - Only tested with one single-connector home charger on the 50five portal.
-- Read-only: there are no buttons or switches for the portal's actions.
+- The command buttons were built from the portal's JavaScript and checked
+  against a simulated portal only. Remote **Start charging** is the least
+  certain part: it assumes the portal wants the internal card id.
 
 ## Development
 
