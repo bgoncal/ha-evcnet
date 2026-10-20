@@ -8,6 +8,7 @@ a code the portal emails to the user.
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import IntFlag, StrEnum
 from html.parser import HTMLParser
 import json
@@ -23,6 +24,7 @@ DEFAULT_BASE_URL = "https://50five-snl.evc-net.com"
 _RECHARGE_SPOTS = "\\LMS\\EV\\AsyncServices\\RechargeSpotsAsyncService"
 _DASHBOARD = "\\LMS\\EV\\AsyncServices\\DashboardAsyncService"
 _TIMEOUT = aiohttp.ClientTimeout(total=30)
+_ALL_TRANSACTIONS = 100_000
 _MAX_REDIRECTS = 5
 
 
@@ -118,7 +120,6 @@ _OFFLINE_MASK2 = ChannelFlag2.NO_COMMUNICATION | ChannelFlag2.POWER_FAILURE
 _FAULTY_MASK2 = 0x4000002F
 _FAULTY_MASK = 0xD8407940
 
-_ENERGY_UNITS = {"wh": 0.001, "kwh": 1.0, "mwh": 1000.0}
 _THOUSANDS_COMMA = re.compile(r"\d{1,3}(,\d{3})+")
 _HOURS_MINUTES = re.compile(r"\s*(\d+)\s*[:hHuU]\s*(\d{1,2})")
 
@@ -223,6 +224,11 @@ class Channel:
             return None
         return self.state is not ChannelState.OFFLINE
 
+    @property
+    def in_transaction(self) -> bool:
+        """Return whether a charging session is open on this channel."""
+        return ChannelFlag.TRANSACTION.name.lower() in self.flags
+
     @classmethod
     def from_overview(cls, row: dict[str, Any]) -> Self:
         """Build from a ``RechargeSpotsAsyncService.overview`` row."""
@@ -254,7 +260,7 @@ class ChargePointStatus:
     """Live status of a charge point."""
 
     channels: dict[str, Channel]
-    total_energy_kwh: float | None
+    total_energy_kwh: float | None = None
 
     @property
     def online(self) -> bool | None:
@@ -269,16 +275,35 @@ def _request(handler: str, method: str, params: dict[str, Any]) -> dict[str, Any
     return {"handler": handler, "method": method, "params": params}
 
 
-def _total_energy(result: Any) -> float | None:
-    if isinstance(result, list) and result:
-        result = result[0]
-    if not isinstance(result, dict):
+def _timestamp(value: Any) -> datetime | None:
+    if not value:
         return None
-    value = _number(result.get("number"))
-    factor = _ENERGY_UNITS.get(str(result.get("unit", "kWh")).lower())
-    if value is None or factor is None:
+    try:
+        return datetime.fromisoformat(str(value))
+    except ValueError:
         return None
-    return value * factor
+
+
+@dataclass(frozen=True, kw_only=True)
+class Transaction:
+    """A charging session from the portal's transaction history."""
+
+    id: str
+    channel: str | None
+    start: datetime | None
+    end: datetime | None
+    energy_kwh: float | None
+
+    @classmethod
+    def from_row(cls, row: dict[str, Any]) -> Self:
+        """Build from a ``DashboardAsyncService.transactions`` row."""
+        return cls(
+            id=str(row.get("IDX")),
+            channel=_text(row.get("CHANNEL")),
+            start=_timestamp(row.get("EVENTDATE_ISO")),
+            end=_timestamp(row.get("ENDDATE_ISO")),
+            energy_kwh=_number(row.get("ENERGY_CONSUMED_KWH")),
+        )
 
 
 _MASKED_EMAIL = re.compile(r"[\w.*+-]+@[\w.*-]+\.[\w*]+")
@@ -484,36 +509,57 @@ class EvcNetClient:
         ids = list(charge_point_ids)
         if not ids:
             return {}
-        requests: list[dict[str, Any]] = []
-        for cp_id in ids:
-            requests.append(
+        results = await self._call(
+            *(
                 _request(_RECHARGE_SPOTS, "overview", {"rechargeSpotId": cp_id})
+                for cp_id in ids
             )
-            requests.append(
-                _request(
-                    _DASHBOARD,
-                    "totalUsage",
-                    {
-                        "mode": "rechargeSpot",
-                        "rechargeSpotIds": [cp_id],
-                        "maxCache": 3600,
-                    },
-                )
-            )
-        results = await self._call(*requests)
+        )
         statuses: dict[str, ChargePointStatus] = {}
-        for index, cp_id in enumerate(ids):
-            rows = results[index * 2]
+        for cp_id, rows in zip(ids, results, strict=True):
             channels = [
                 Channel.from_overview(row)
                 for row in (rows if isinstance(rows, list) else [])
                 if isinstance(row, dict)
             ]
             statuses[cp_id] = ChargePointStatus(
-                channels={ch.channel: ch for ch in channels},
-                total_energy_kwh=_total_energy(results[index * 2 + 1]),
+                channels={ch.channel: ch for ch in channels}
             )
         return statuses
+
+    async def transactions(
+        self, charge_point_ids: Iterable[str]
+    ) -> dict[str, list[Transaction]]:
+        """Return the full charging history of the given charge points."""
+        ids = list(charge_point_ids)
+        if not ids:
+            return {}
+        results = await self._call(
+            *(
+                _request(
+                    _DASHBOARD,
+                    "transactions",
+                    {
+                        "rechargeSpotIds": [cp_id],
+                        "customerId": None,
+                        "cardId": None,
+                        "transactions": _ALL_TRANSACTIONS,
+                        "transactionsMaxAge": None,
+                        "mode": None,
+                        "maxCache": 0,
+                    },
+                )
+                for cp_id in ids
+            )
+        )
+        return {
+            cp_id: [
+                Transaction.from_row(row)
+                for row in (rows if isinstance(rows, list) else [])
+                if isinstance(row, dict)
+            ]
+            for cp_id, rows in zip(ids, results, strict=True)
+        }
 
     async def _finish_login(self, landing: aiohttp.ClientResponse) -> None:
         if _is_login_page(landing.url):

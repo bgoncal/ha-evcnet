@@ -106,12 +106,43 @@ gets an extra device per connector.
 | `sensor.…_card` | Card | Attribute `customer` holds the Client column |
 | `binary_sensor.…_charging` | Status | On during an active transaction that hasn't completed |
 | `binary_sensor.…_problem` | Status | On when the portal would show the red "Faulty" dot |
-| `sensor.…_total_energy_delivered` | "Delivered" tile | Lifetime kWh; works in the Energy dashboard |
+| `sensor.…_total_energy_delivered` | Transaction history + live session | Lifetime kWh with 0.01 kWh resolution; **use this one in the Energy dashboard** |
 | `sensor.…_state_of_charge` | SoC | Disabled by default; AC chargers rarely report it |
 | `sensor.…_connector` | Connector type | Disabled by default, diagnostic |
 
 The integration polls every 30 seconds (the portal's own page polls every 15).
-The "Delivered" total is cached by the portal for up to an hour.
+
+## Energy dashboard
+
+**Total energy delivered** is a lifetime energy meter (`total_increasing`, kWh),
+so the Energy dashboard can use it for your charger's consumption:
+
+1. Go to **Settings → Dashboards → Energy**.
+2. Under **Individual devices**, choose **Add device** and pick
+   *<your charger> Total energy delivered*.
+3. Optionally pick the charger's **Power** sensor as its power source, if your
+   Home Assistant version offers that, to see live charging power.
+
+Don't also add **Session energy**: it covers the same energy one session at a
+time, so the charger would be counted twice. It's still useful on its own
+dashboards.
+
+How the total is calculated:
+
+- **Value:** the sum of every completed session in the portal's transaction
+  history (to 0.01 kWh) plus the energy of the session in progress. It rises
+  every 30 seconds while charging instead of jumping at the end of a session.
+  The portal's own "Delivered" tile is the same sum rounded to whole kWh and
+  cached for up to an hour, which is why it isn't used.
+- **When the history is read:** when a session starts or ends, and every 10
+  minutes. That's about 0.5 kB per session ever recorded, so the 30-second
+  polls stay light.
+- **Never decreasing:** a session that just ended may not be in the history
+  yet. The value is held rather than dropping, since a drop would show up as
+  negative energy, and catches up when the portal lists the session.
+- **Missed energy:** if Home Assistant is off while you charge, nothing is
+  lost. The next history read adds the session at its final value, so the
+  dashboard puts all of that energy in the hour Home Assistant comes back.
 
 ## How it works
 
@@ -138,7 +169,8 @@ one result per call, in the same order:
 | --- | --- | --- | --- |
 | `DashboardAsyncService` | `networkOverview` | `{"mode": "id"}` | All charge points on the account: id, address, firmware, channels |
 | `RechargeSpotsAsyncService` | `overview` | `{"rechargeSpotId": id}` | The real-time dashboard rows |
-| `DashboardAsyncService` | `totalUsage` | `{"mode": "rechargeSpot", "rechargeSpotIds": [id], "maxCache": 3600}` | `[{"number": "532", "unit": "kWh"}]` |
+| `DashboardAsyncService` | `transactions` | `{"rechargeSpotIds": [id], "transactions": <max count>, ...}` | Charging history: start/end (ISO), `ENERGY_CONSUMED_KWH` with two decimals, price |
+| `DashboardAsyncService` | `totalUsage` | `{"mode": "rechargeSpot", "rechargeSpotIds": [id], "maxCache": 3600}` | `{"number": "532", "unit": "kWh"}`, the rounded history total (not used) |
 | `DashboardAsyncService` | `occupancy` / `current` / `spotsStatus` | see the portal | Occupancy chart, 24 h power chart, map status (not used) |
 
 **Login.**

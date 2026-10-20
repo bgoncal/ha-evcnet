@@ -1,6 +1,7 @@
 """Tests for the EVC-net API client against a fake portal."""
 
 from collections.abc import AsyncGenerator
+from datetime import UTC, datetime
 import json
 import secrets
 from typing import Any
@@ -19,7 +20,6 @@ from custom_components.evcnet.api import (
     EvcNetSessionExpired,
     EvcNetTwoFactorRequired,
     _number,
-    _total_energy,
     channel_state,
     parse_status,
 )
@@ -180,7 +180,7 @@ class FakePortal:
         return {
             "networkOverview": lambda: load_fixture("network_overview.json"),
             "overview": lambda: self.overview,
-            "totalUsage": lambda: load_fixture("total_usage.json"),
+            "transactions": lambda: load_fixture("transactions.json"),
         }[req["method"]]()
 
 
@@ -234,8 +234,9 @@ async def test_status_offline(
     assert channel.notification == "No communication"
     assert channel.connector == "IEC-62196-T2"
     assert channel.power_kw is None
+    assert channel.in_transaction is False
     assert status.online is False
-    assert status.total_energy_kwh == 532.0
+    assert status.total_energy_kwh is None
 
 
 async def test_status_charging(
@@ -255,7 +256,26 @@ async def test_status_charging(
     assert channel.session_energy_kwh == 3.21
     assert channel.session_minutes == 65
     assert channel.card_id == "NL-ABC-C12345678-X"
+    assert channel.in_transaction is True
     assert status.online is True
+
+
+async def test_transactions(
+    portal: tuple[FakePortal, str], session: aiohttp.ClientSession
+) -> None:
+    """Test reading the charging history."""
+    _, url = portal
+    client = EvcNetClient(session, USERNAME, PASSWORD, url)
+
+    transactions = (await client.transactions([CHARGE_POINT_ID]))[CHARGE_POINT_ID]
+
+    assert [tx.id for tx in transactions] == ["1001", "1000", "999", "1002"]
+    latest = transactions[0]
+    assert latest.energy_kwh == 17.03
+    assert latest.channel == "1"
+    assert latest.start == datetime(2026, 10, 6, 7, 42, 13, tzinfo=UTC)
+    assert latest.end == datetime(2026, 10, 7, 10, 41, 5, tzinfo=UTC)
+    assert transactions[-1].end is None
 
 
 async def test_two_factor_login(
@@ -471,19 +491,3 @@ def test_unparseable_status(code: str | None) -> None:
 def test_number(value: Any, expected: float | None) -> None:
     """Test number parsing across locales."""
     assert _number(value) == expected
-
-
-@pytest.mark.parametrize(
-    ("payload", "expected"),
-    [
-        ({"number": "532", "unit": "kWh"}, 532.0),
-        ({"number": "1,2", "unit": "MWh"}, 1200.0),
-        ({"number": "532", "unit": "furlongs"}, None),
-        ([{"number": "532", "unit": "kWh"}], 532.0),
-        ([], None),
-        (None, None),
-    ],
-)
-def test_total_energy(payload: Any, expected: float | None) -> None:
-    """Test total energy unit handling."""
-    assert _total_energy(payload) == expected

@@ -119,6 +119,7 @@ CHARGE_POINT_SENSORS: tuple[EvcNetChargePointSensorDescription, ...] = (
         device_class=SensorDeviceClass.ENERGY,
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         state_class=SensorStateClass.TOTAL_INCREASING,
+        suggested_display_precision=2,
         value_fn=lambda status: status.total_energy_kwh,
     ),
 )

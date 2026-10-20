@@ -9,7 +9,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.evcnet.api import Channel, ChargePoint, ChargePointStatus
+from custom_components.evcnet.api import (
+    Channel,
+    ChargePoint,
+    ChargePointStatus,
+    Transaction,
+)
 from custom_components.evcnet.const import CONF_COOKIES, CONF_TWO_FACTOR, DOMAIN
 from homeassistant.const import CONF_PASSWORD, CONF_URL, CONF_USERNAME
 
@@ -29,9 +34,12 @@ def load_fixture(name: str) -> Any:
 def status_from_fixture(name: str) -> ChargePointStatus:
     """Build a charge point status from an overview fixture."""
     channels = [Channel.from_overview(row) for row in load_fixture(name)]
-    return ChargePointStatus(
-        channels={ch.channel: ch for ch in channels}, total_energy_kwh=532.0
-    )
+    return ChargePointStatus(channels={ch.channel: ch for ch in channels})
+
+
+def transactions_from_fixture() -> list[Transaction]:
+    """Build the charging history from the transactions fixture."""
+    return [Transaction.from_row(row) for row in load_fixture("transactions.json")]
 
 
 @pytest.fixture(autouse=True)
@@ -83,6 +91,9 @@ def mock_client_cls(overview_fixture: str) -> Generator[MagicMock]:
         ]
         client.status.return_value = {
             CHARGE_POINT_ID: status_from_fixture(overview_fixture)
+        }
+        client.transactions.return_value = {
+            CHARGE_POINT_ID: transactions_from_fixture()
         }
         yield client_cls
 

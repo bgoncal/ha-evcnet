@@ -1,24 +1,52 @@
 """Tests for setting up EVC-net and its entities."""
 
+from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock
 
+from freezegun.api import FrozenDateTimeFactory
 import pytest
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_fire_time_changed,
+)
 
 from custom_components.evcnet.api import (
     EvcNetAuthError,
     EvcNetConnectionError,
     EvcNetSessionExpired,
+    Transaction,
 )
 from custom_components.evcnet.const import CONF_COOKIES
+from homeassistant.components.sensor import (
+    ATTR_STATE_CLASS,
+    SensorDeviceClass,
+    SensorStateClass,
+)
 from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntryState
-from homeassistant.const import STATE_OFF, STATE_ON, STATE_UNKNOWN
+from homeassistant.const import (
+    ATTR_DEVICE_CLASS,
+    ATTR_UNIT_OF_MEASUREMENT,
+    STATE_OFF,
+    STATE_ON,
+    STATE_UNKNOWN,
+    UnitOfEnergy,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
+from homeassistant.util import dt as dt_util
 
-from .conftest import BASE_URL, CHARGE_POINT_ID, COOKIES, PASSWORD, USERNAME
+from .conftest import (
+    BASE_URL,
+    CHARGE_POINT_ID,
+    COOKIES,
+    PASSWORD,
+    USERNAME,
+    status_from_fixture,
+    transactions_from_fixture,
+)
 
 PREFIX = f"charge_point_{CHARGE_POINT_ID}"
+TOTAL_ENERGY = f"sensor.{PREFIX}_total_energy_delivered"
 
 
 async def _setup(hass: HomeAssistant, entry: MockConfigEntry) -> None:
@@ -43,7 +71,8 @@ async def test_offline_charge_point(
     assert hass.states.get(f"sensor.{PREFIX}_notification").state == "No communication"
     assert hass.states.get(f"sensor.{PREFIX}_power").state == STATE_UNKNOWN
     assert hass.states.get(f"binary_sensor.{PREFIX}_charging").state == STATE_UNKNOWN
-    assert hass.states.get(f"sensor.{PREFIX}_total_energy_delivered").state == "532.0"
+    # Completed sessions only; the open one in the history is not counted.
+    assert hass.states.get(TOTAL_ENERGY).state == "63.09"
 
 
 @pytest.mark.parametrize("overview_fixture", ["overview_charging.json"])
@@ -61,6 +90,7 @@ async def test_charging_charge_point(
     assert hass.states.get(f"sensor.{PREFIX}_power").state == "7.36"
     assert hass.states.get(f"sensor.{PREFIX}_session_energy").state == "3.21"
     assert hass.states.get(f"sensor.{PREFIX}_session_duration").state == "65"
+    assert hass.states.get(TOTAL_ENERGY).state == "66.3"
     card = hass.states.get(f"sensor.{PREFIX}_card")
     assert card.state == "NL-ABC-C12345678-X"
     assert card.attributes["customer"] == "Jane Doe"
@@ -152,3 +182,65 @@ async def test_unload(hass: HomeAssistant, mock_config_entry: MockConfigEntry) -
 
     assert await hass.config_entries.async_unload(mock_config_entry.entry_id)
     assert mock_config_entry.state is ConfigEntryState.NOT_LOADED
+
+
+@pytest.mark.usefixtures("mock_client")
+async def test_total_energy_fits_energy_dashboard(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry
+) -> None:
+    """Test the attributes the Energy dashboard requires."""
+    await _setup(hass, mock_config_entry)
+
+    attributes = hass.states.get(TOTAL_ENERGY).attributes
+    assert attributes[ATTR_DEVICE_CLASS] == SensorDeviceClass.ENERGY
+    assert attributes[ATTR_STATE_CLASS] == SensorStateClass.TOTAL_INCREASING
+    assert attributes[ATTR_UNIT_OF_MEASUREMENT] == UnitOfEnergy.KILO_WATT_HOUR
+
+
+async def test_total_energy_through_a_session(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_client: AsyncMock,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """Test the lifetime total while charging and after the session ends."""
+
+    async def poll(seconds: int = 30) -> str:
+        freezer.tick(timedelta(seconds=seconds))
+        async_fire_time_changed(hass)
+        await hass.async_block_till_done()
+        return hass.states.get(TOTAL_ENERGY).state
+
+    await _setup(hass, mock_config_entry)
+    assert hass.states.get(TOTAL_ENERGY).state == "63.09"
+    assert mock_client.transactions.call_count == 1
+
+    # Charging: the open session counts live, and its start re-reads history.
+    mock_client.status.return_value = {
+        CHARGE_POINT_ID: status_from_fixture("overview_charging.json")
+    }
+    assert await poll() == "66.3"
+    assert mock_client.transactions.call_count == 2
+    assert await poll() == "66.3"
+    assert mock_client.transactions.call_count == 2
+
+    # The session ended but the portal has not listed it yet: hold the value.
+    mock_client.status.return_value = {
+        CHARGE_POINT_ID: status_from_fixture("overview_offline.json")
+    }
+    assert await poll() == "66.3"
+    assert mock_client.transactions.call_count == 3
+
+    # The portal lists it later; the periodic re-read picks up the final value.
+    finished = Transaction(
+        id="1003",
+        channel="1",
+        start=dt_util.utcnow() - timedelta(hours=1),
+        end=dt_util.utcnow(),
+        energy_kwh=3.25,
+    )
+    mock_client.transactions.return_value = {
+        CHARGE_POINT_ID: [*transactions_from_fixture(), finished]
+    }
+    assert await poll() == "66.3"
+    assert await poll(600) == "66.34"
